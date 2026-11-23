@@ -1,0 +1,11 @@
+genus = 2
+tau_im = 0.7
+n = 3
+m = 1
+omega22 = 1.8
+# Remove this table to draw the three maximal bands of the article.
+[split]
+passband = 2
+tile = 1
+from = 0.25
+to = 0.65

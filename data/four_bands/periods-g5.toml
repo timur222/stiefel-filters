@@ -1,0 +1,5 @@
+genus = 5
+tau_im = 0.7
+poles = [-1.0, 1.0]
+residues = [1.0, 1.0]
+offset = 0.0

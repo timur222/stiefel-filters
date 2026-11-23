@@ -1,0 +1,11 @@
+genus = 3
+tau_im = 0.7000585045606659
+n = 3
+m1 = 1
+m2 = 2
+omega22 = 0.8522154941218228
+omega33 = 0.5744824994896586
+# Optional consistency check. Without this entry the solver computes Ω23.
+# omega23 = 0.394835304748851
+trims = [0.2005990182541181, 0.30045953696537414]
+sides = ["above", "above"]
