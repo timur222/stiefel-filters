@@ -1,0 +1,4 @@
+println("PROGRAM_FILE=", PROGRAM_FILE)
+println("abspath(PROGRAM_FILE)=", abspath(PROGRAM_FILE))
+println("@__FILE__=", @__FILE__)
+println("equal=", abspath(PROGRAM_FILE) == @__FILE__)
