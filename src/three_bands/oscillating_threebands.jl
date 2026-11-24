@@ -3,7 +3,8 @@
 
 Construct three free real bands with targets (-1, 1, 1) and weights (1, 1, 1/2).
 Compare the two seam phases and place the two inner cuts using their common
-contact window. The interface and the endpoints are computed in Float64.
+contact window. The interface uses Float64. Long rectangles use BigFloat
+for the physical endpoints so that distinct bands remain representable.
 Use `welded_value(solution, x)` on any of the three closed bands.
 """
 function oscillating_threebands(n::Integer, epsilon::Real; order::Int=28)
@@ -12,15 +13,15 @@ function oscillating_threebands(n::Integer, epsilon::Real; order::Int=28)
     phases = map((0, 1)) do offset
         welded_threebands(n, m, epsilon; third_weight=0.5, offset, order)
     end
-    chosen = phases[1].modulus >= phases[2].modulus ? phases[1] : phases[2]
-    outer = elliptic_constants(2 * chosen.modulus)
-    outer.k >= sqrt(floatmin(Float64)) ||
-        throw(ArgumentError("the symmetric outer coordinates require higher precision"))
-
-    marks = map(phases) do f
-        previous = welded_wall(f, 1, 1, m - 1).x
-        narrow = welded_wall(f, 1, 1, m).x
-        broad = welded_wall(f, 2, 1, m).x
+    # Both phases share the same two bulk heights, including for odd n.
+    selected = phases[1].excess >= phases[2].excess ? 1 : 2
+    chosen = phases[selected]
+    targets = map(f -> _weld_outer(f.modulus), phases)
+    target = targets[selected]
+    marks = map(phases, targets) do f, outer
+        previous = welded_wall(f, 1, 1, m - 1, outer).x
+        narrow = welded_wall(f, 1, 1, m, outer).x
+        broad = welded_wall(f, 2, 1, m, outer).x
         (; previous, narrow, broad)
     end
     L = minimum(mark.narrow for mark in marks)
@@ -32,7 +33,8 @@ function oscillating_threebands(n::Integer, epsilon::Real; order::Int=28)
     grids = (left=_weld_grid(chosen, :left), right=_weld_grid(chosen, :right),
              tip=_weld_grid(chosen, :tip))
     filter = merge(chosen, (; grids))
-    target = (M=chosen.modulus, q=outer.k, K=outer.K)
-    ends = [-1.0, -outer.k, outer.k, L, R, 1.0]
-    (; filter, target, ends, marks, moduli=map(f -> f.modulus, phases))
+    seam_heights(wall) = map(i -> welded_wall_height(filter, i, wall, m), (1, 2))
+    seam = (left=seam_heights(-1), right=seam_heights(1))
+    ends = [-1.0, -target.q, target.q, L, R, 1.0]
+    (; filter, target, ends, marks, seam, moduli=map(f -> f.modulus, phases))
 end

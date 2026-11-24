@@ -92,9 +92,10 @@ function welded_threebands(n::Integer,m::Integer,e::Real;third_weight=2.,offset=
     C=D*[cospi(k*v) for v in eta,k in ks]/count
     S .+= (2/π).*(C*Diagonal([(tanh(π*k*ha)-1)/k for k in ks])*transpose(C))
     coeff=-(cholesky(Symmetric(S[2:end,2:end]))\S[2:end,1])
-    modulus=hb+ha+S[1,1]+dot(S[1,2:end],coeff)
+    excess=S[1,1]+dot(S[1,2:end],coeff)
+    modulus=(hb+ha)+excess
     isfinite(modulus) && modulus>0 || throw(ArgumentError("unresolved welded modulus"))
-    (;n,m,epsilon=e,third_weight,offset,order,blocks,h,bi,ai,trans,coeff,modulus,
+    (;n,m,epsilon=e,third_weight,offset,order,blocks,h,bi,ai,trans,coeff,modulus,excess,
         edge_end=first(_weld_edge(b,a,trans,1.)))
 end
 
@@ -135,6 +136,7 @@ end
 # Harmonic conjugate measured from the remote horizontal side.
 function _weld_remote(f,i,s0,y)
     h=f.h[i]; y==0 && return 0.
+    exp(-π*(h-y)) == 0 && return y
     if i==f.bi
         return y+sum(f.coeff[j]*cospi(j*s0)*_weld_sinh_ratio(j,y,h)/(π*j) for j in 1:f.order)
     end
@@ -165,20 +167,60 @@ function welded_wall_height(f,i,wall,t)
     i==1 ? z : f.modulus-z
 end
 
+# q is the elliptic modulus, not the nome. The original Carlson inversion
+# uses q². Switch coordinates before that square becomes subnormal.
+function _weld_outer(M)
+    if log(4.0) - π*M >= log(sqrt(floatmin(Float64)))
+        outer = elliptic_constants(2M)
+        return (; M, q=outer.k, K=outer.K)
+    end
+    q = 4 * exp(-big(π) * M)
+    (; M, q, K=π/2)
+end
+
+# X(v)X(M-v)=q on the positive wall. For v≤M/2 the theta series gives
+# X(v)=q*cosh(πv)*(1+O(exp(-πM))). At the precision switch the omitted
+# relative correction is smaller than 1e-153, throughout this half-wall.
+function _weld_abscissa(outer, v)
+    M, q = outer.M, outer.q
+    v == 0 && return q
+    v == M && return one(q)
+    if q isa BigFloat
+        return v <= M/2 ? q * cosh(big(π)*v) : inv(cosh(big(π)*(M-v)))
+    end
+    q * real(elliptic_value(1+2im*v, 2M))
+end
+
+function _weld_height(outer, x)
+    M, q = outer.M, outer.q
+    a = abs(x)
+    a == q && return 0.0
+    a == 1 && return M
+    if q isa BigFloat
+        a = BigFloat(a)
+        height = a <= sqrt(q) ? acosh(a/q)/big(π) : M - acosh(inv(a))/big(π)
+        return clamp(Float64(height), 0.0, M)
+    end
+    tiles = _zolo_tiles((; n=2M, q, K=outer.K, T=1.0), a)
+    clamp(Float64(tiles)/2, 0.0, M)
+end
+
 """Parametric (x,r) on a vertical wall, in the symmetric outer-endpoint gauge."""
-function welded_wall(f,i,wall,t)
-    v=welded_wall_height(f,i,wall,t); H=2f.modulus
-    q=elliptic_constants(H).k
-    x=wall*(v==0 ? q : v==f.modulus ? 1. : q*real(elliptic_value(1+2im*v,H)))
+function welded_wall(f,i,wall,t,outer=_weld_outer(f.modulus))
+    v=welded_wall_height(f,i,wall,t)
+    x=wall*_weld_abscissa(outer,v)
     b=f.blocks[i]
     z=_weighted_phase(b.c,b.T,b.seed,t+f.offset,wall)
     (;x,value=wall+f.epsilon*(wall==1 ? b.widthfactor : 1.)*z)
 end
 
 function _weld_bisect(fun,goal,lo,hi,increasing)
-    for _ in 1:42
+    for _ in 1:60
         mid=(lo+hi)/2
-        if (fun(mid)<goal)==increasing
+        (mid==lo || mid==hi) && return mid
+        level=fun(mid)
+        level==goal && return mid
+        if (level<goal)==increasing
             lo=mid
         else
             hi=mid
@@ -187,20 +229,55 @@ function _weld_bisect(fun,goal,lo,hi,increasing)
     (lo+hi)/2
 end
 
+# In a straight block the conjugate height is the tile height plus a
+# bounded seam correction. Bracket that correction around the straight
+# estimate, so the precision of an interior sample does not depend on how
+# many tiles lie between it and the outer end.
+function _weld_tile_at_height(f, block, wall, v)
+    tile_height = f.blocks[block].T / 2
+    if block == 1
+        lo, hi = 0.0, Float64(f.m)
+        guess = v / tile_height
+    else
+        lo, hi = Float64(f.m), Float64(f.n)
+        guess = f.n - (f.modulus - v) / tile_height
+    end
+    t = clamp(guess, lo, hi)
+    height(t) = welded_wall_height(f, block, wall, t)
+    level = height(t)
+    level == v && return t
+    step = 1.0
+    if level < v
+        right = min(hi, t + step)
+        while right < hi && height(right) < v
+            step *= 2
+            right = min(hi, t + step)
+        end
+        return _weld_bisect(height, v, t, right, true)
+    end
+    left = max(lo, t - step)
+    while left > lo && height(left) > v
+        step *= 2
+        left = max(lo, t - step)
+    end
+    _weld_bisect(height, v, left, t, true)
+end
+
 """Evaluate the welded rational function on a prescribed working interval."""
 function welded_value(solution,x::Real)
     f=solution.filter; E=solution.ends; target=solution.target
     band=findfirst(j->E[2j-1]<=x<=E[2j],1:3)
     isnothing(band) && throw(DomainError(x,"x is outside the working bands"))
     wall=band==1 ? -1 : 1
-    v=_zolo_tiles((;n=2target.M,q=target.q,K=target.K,T=1.),x)/2
-    v=clamp(v,0.,f.modulus)
-    v1=welded_wall_height(f,1,wall,f.m)
-    v2=welded_wall_height(f,2,wall,f.m)
+    v=_weld_height(target,x)
+    v1,v2=if hasproperty(solution,:seam)
+        wall == -1 ? solution.seam.left : solution.seam.right
+    else
+        map(i -> welded_wall_height(f,i,wall,f.m),(1,2))
+    end
     if v<=v1 || wall== -1 || v>=v2
         i=v<=v1 ? 1 : 2
-        lo,hi=i==1 ? (0.,Float64(f.m)) : (Float64(f.m),Float64(f.n))
-        t=_weld_bisect(t->welded_wall_height(f,i,wall,t),v,lo,hi,true)
+        t=_weld_tile_at_height(f,i,wall,v)
         b=f.blocks[i]
         z=_weighted_phase(b.c,b.T,b.seed,t+f.offset,wall)
         width=wall==1 ? b.widthfactor : 1.
