@@ -26,6 +26,35 @@
     end
 end
 
+@testset "Independent band weights and exchange of the two passbands" begin
+    n, epsilon = 16, 0.1
+    w = (2.0, 3.0, 1.0)
+    direct = oscillating_threebands(n, epsilon; weights=w)
+    swapped = oscillating_threebands(n, epsilon; weights=(w[1], w[3], w[2]))
+    scaled = oscillating_threebands(n, 2epsilon; weights=2 .* w)
+    @test scaled.ends == direct.ends
+    @test !direct.reflected && swapped.reflected
+    q = direct.target.q
+    @test swapped.ends[4:5] ≈ q ./ reverse(direct.ends[4:5])
+    for (band, chart, wall, tiles) in ((1, 1, -1, (1, 2.4, 3)),
+                                      (2, 1,  1, (1, 2.4, 3)),
+                                      (3, 2,  1, (9, 10.4, 11)))
+        for t in tiles
+            contact = StiefelFourBands.welded_wall(direct.filter, chart, wall, t)
+            u = welded_value(direct, contact.x)
+            v = welded_value(swapped, q/contact.x)
+            @test u.value ≈ contact.value atol=1e-10
+            @test v.value ≈ u.value atol=1e-10
+            @test v.normalized ≈ u.normalized atol=1e-9
+            @test u.normalized ≈ w[band]*(u.value-wall)/epsilon atol=1e-12
+            isinteger(t) && @test abs(u.normalized) ≈ 1 atol=1e-9
+        end
+    end
+    # The left edge of the broad band lies on the exposed seam in this example.
+    x = direct.ends[5]
+    @test welded_value(swapped, q/x).normalized ≈ welded_value(direct, x).normalized atol=1e-9
+end
+
 @testset "Three bands with exponentially small physical endpoints" begin
     S = StiefelFourBands
     for n in (1024, 1_000_000)

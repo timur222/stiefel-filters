@@ -58,20 +58,20 @@ function _weld_edge(b,a,A,s)
 end
 
 """
-    welded_threebands(n,m,epsilon; third_weight=2, offset=0, order=24)
+    welded_threebands(n,m,epsilon; second_weight=1, third_weight=2, offset=0, order=24)
 
 Direct welded quadrilateral in the mode m, with n−m tiles in block 2.
 The field modulus is the height divided by the width of the uniformized
 rectangle. Fourier order controls a one-dimensional interface calculation.
 """
-function welded_threebands(n::Integer,m::Integer,e::Real;third_weight=2.,offset=0,order::Int=24)
+function welded_threebands(n::Integer,m::Integer,e::Real;second_weight=1.,third_weight=2.,offset=0,order::Int=24)
     1<=m<n<2^52 && offset in (0,1) && order>=4 || throw(ArgumentError("expected 0<m<n<2^52, offset 0 or 1, order ≥4"))
-    rho=1/Float64(third_weight); e=Float64(e)
-    isfinite(rho) && rho>0 && rho!=1 && 0<e<2/(1+max(1.,rho)) ||
+    widths=inv.((Float64(second_weight),Float64(third_weight))); e=Float64(e)
+    all(w -> isfinite(w) && w>0, widths) && widths[1]!=widths[2] && 0<e<2/(1+maximum(widths)) ||
         throw(ArgumentError("expected unequal positive widths with separate positive and negative bands"))
-    blocks=(_weld_block(e,1.,isodd(m+offset)),_weld_block(e,rho,isodd(m+offset)))
+    blocks=map(width -> _weld_block(e,width,isodd(m+offset)), widths)
     h=(m*blocks[1].T/2,(n-m)*blocks[2].T/2)
-    bi=rho<1 ? 1 : 2; ai=3-bi
+    bi=argmax(widths); ai=3-bi
     b,a=blocks[bi],blocks[ai]; hb,ha=h[bi],h[ai]
     trans=a.edge\b.edge
     # The narrow block's infinite-strip logarithmic kernel minus the
@@ -95,7 +95,7 @@ function welded_threebands(n::Integer,m::Integer,e::Real;third_weight=2.,offset=
     excess=S[1,1]+dot(S[1,2:end],coeff)
     modulus=(hb+ha)+excess
     isfinite(modulus) && modulus>0 || throw(ArgumentError("unresolved welded modulus"))
-    (;n,m,epsilon=e,third_weight,offset,order,blocks,h,bi,ai,trans,coeff,modulus,excess,
+    (;n,m,epsilon=e,second_weight,third_weight,offset,order,blocks,h,bi,ai,trans,coeff,modulus,excess,
         edge_end=first(_weld_edge(b,a,trans,1.)))
 end
 
@@ -269,6 +269,11 @@ function welded_value(solution,x::Real)
     band=findfirst(j->E[2j-1]<=x<=E[2j],1:3)
     isnothing(band) && throw(DomainError(x,"x is outside the working bands"))
     wall=band==1 ? -1 : 1
+    if get(solution,:reflected,false)
+        x=target.q/x
+        band=band==1 ? 1 : 5-band
+    end
+    relative_weight=(1.0,get(f,:second_weight,1.0),f.third_weight)[band]
     v=_weld_height(target,x)
     v1,v2=if hasproperty(solution,:seam)
         wall == -1 ? solution.seam.left : solution.seam.right
@@ -282,7 +287,7 @@ function welded_value(solution,x::Real)
         z=_weighted_phase(b.c,b.T,b.seed,t+f.offset,wall)
         width=wall==1 ? b.widthfactor : 1.
         y=wall+f.epsilon*width*z
-        return (;value=y,normalized=(band==3 ? f.third_weight : 1.)*width*z)
+        return (;value=y,normalized=relative_weight*width*z)
     end
     # The exposed part of the narrow rectangle's horizontal side belongs
     # to the real boundary and can lie inside the broad working interval.
@@ -295,5 +300,5 @@ function welded_value(solution,x::Real)
     a=f.blocks[f.ai]
     z=(1-a.delta)*real(elliptic_value(2s-1,a.T))
     y=(a.edge[1,1]*z+a.edge[1,2])/(a.edge[2,1]*z+a.edge[2,2])
-    (;value=y,normalized=(y-1)*(band==3 ? f.third_weight : 1.)/f.epsilon)
+    (;value=y,normalized=(y-1)*relative_weight/f.epsilon)
 end
