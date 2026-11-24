@@ -7,3 +7,4 @@ include("stiefel/surface_theta_log.jl")
 end
 
 include("four_bands/runtests.jl")
+include("three_bands/oscillating_threebands.jl")
